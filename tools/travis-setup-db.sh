@@ -13,25 +13,29 @@ MIM_PRIV_DIR=${BASE}/priv
 
 DB_CONF_DIR=${BASE}/${TOOLS}/db_configs/$DB
 
-SQL_TEMP_DIR=/tmp/sql
-
 MYSQL_DIR=/etc/mysql/conf.d
 
 PGSQL_ODBC_CERT_DIR=~/.postgresql
 
 SSLDIR=${BASE}/${TOOLS}/ssl
 
+SQL_TEMP_DIR="$(mktemp -d --suffix=mongoose_sql_conf)"
+SQL_DATA_DIR="$(mktemp -d --suffix=mongoose_sql_data)"
+
+echo "SQL_TEMP_DIR is $SQL_TEMP_DIR"
+echo "SQL_DATA_DIR is $SQL_DATA_DIR"
+
 if [ "$DB" = 'mysql' ]; then
     echo "Configuring mysql"
     # TODO We should not use sudo
     sudo -n service mysql stop || echo "Failed to stop mysql"
-    mkdir -p ${SQL_TEMP_DIR}
+    docker rm -f mongooseim-mysql || echo "Skip removing previous container"
     cp ${SSLDIR}/fake_cert.pem ${SQL_TEMP_DIR}/.
     openssl rsa -in ${SSLDIR}/fake_key.pem -out ${SQL_TEMP_DIR}/fake_key.pem
     # mysql_native_password is needed until mysql-otp implements caching-sha2-password
     # https://github.com/mysql-otp/mysql-otp/issues/83
     docker run -d \
-        -e SQL_TEMP_DIR=${SQL_TEMP_DIR} \
+        -e SQL_TEMP_DIR=/tmp/sql \
         -e MYSQL_ROOT_PASSWORD=secret \
         -e MYSQL_DATABASE=ejabberd \
         -e MYSQL_USER=ejabberd \
@@ -39,23 +43,25 @@ if [ "$DB" = 'mysql' ]; then
         -v ${DB_CONF_DIR}/mysql.cnf:${MYSQL_DIR}/mysql.cnf:ro \
         -v ${MIM_PRIV_DIR}/mysql.sql:/docker-entrypoint-initdb.d/mysql.sql:ro \
         -v ${BASE}/${TOOLS}/docker-setup-mysql.sh:/docker-entrypoint-initdb.d/docker-setup-mysql.sh \
-        -v ${SQL_TEMP_DIR}:${SQL_TEMP_DIR} \
+        -v ${SQL_TEMP_DIR}:/tmp/sql \
+        -v ${SQL_DATA_DIR}:/var/lib/mysql \
         --health-cmd='mysqladmin ping --silent' \
         -p 3306:3306 --name=mongooseim-mysql \
         mysql --default-authentication-plugin=mysql_native_password
 
 elif [ "$DB" = 'pgsql' ]; then
     echo "Configuring postgres with SSL"
-    sudo service postgresql stop || echo "Failed to stop psql"
-    mkdir ${SQL_TEMP_DIR}
+    sudo -n service postgresql stop || echo "Failed to stop psql"
+    docker rm -f mongooseim-pgsql || echo "Skip removing previous container"
     cp ${SSLDIR}/fake_cert.pem ${SQL_TEMP_DIR}/.
     cp ${SSLDIR}/fake_key.pem ${SQL_TEMP_DIR}/.
     cp ${DB_CONF_DIR}/postgresql.conf ${SQL_TEMP_DIR}/.
     cp ${DB_CONF_DIR}/pg_hba.conf ${SQL_TEMP_DIR}/.
     cp ${MIM_PRIV_DIR}/pg.sql ${SQL_TEMP_DIR}/.
     docker run -d \
-           -e SQL_TEMP_DIR=${SQL_TEMP_DIR} \
-           -v ${SQL_TEMP_DIR}:${SQL_TEMP_DIR} \
+           -e SQL_TEMP_DIR=/tmp/sql \
+           -v ${SQL_TEMP_DIR}:/tmp/sql \
+           -v ${SQL_DATA_DIR}:/var/lib/postgresql/data \
            -v ${BASE}/${TOOLS}/docker-setup-postgres.sh:/docker-entrypoint-initdb.d/docker-setup-postgres.sh \
            -p 5432:5432 --name=mongooseim-pgsql postgres
     mkdir ${PGSQL_ODBC_CERT_DIR} || echo "PGSQL odbc cert dir already exists"
